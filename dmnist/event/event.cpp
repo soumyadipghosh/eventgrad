@@ -2,7 +2,7 @@
 #include <iostream>
 #include "mpi.h"
 
-float findThreshold(int, float, float);
+//float findThreshold(int, float, float);
 
 std::map<at::ScalarType, MPI_Datatype> mpiDatatype = {
     {at::kByte, MPI_UNSIGNED_CHAR},
@@ -14,11 +14,12 @@ std::map<at::ScalarType, MPI_Datatype> mpiDatatype = {
     {at::kShort, MPI_SHORT},
 };
 
-// Define a new Module.
+/*
+// Define a completely Linear Module.
 struct Model : torch::nn::Module {
     Model()
     {
-        // Construct and register two Linear submodules.
+        // Construct and register Linear submodules.
         fc1 = register_module("fc1", torch::nn::Linear(784, 128));
         fc2 = register_module("fc2", torch::nn::Linear(128, 10));
     }
@@ -35,6 +36,39 @@ struct Model : torch::nn::Module {
     // Use one of many "standard library" modules.
     torch::nn::Linear fc1{nullptr}, fc2{nullptr};
 };
+*/
+
+//Define a Convolutional Module
+struct Model : torch::nn::Module {
+    Model()
+          : conv1(torch::nn::Conv2dOptions(1, 10, 5)),
+            conv2(torch::nn::Conv2dOptions(10, 20, 5)),
+            fc1(320, 50),
+            fc2(50, 10) {
+        register_module("conv1", conv1);
+        register_module("conv2", conv2);
+        register_module("conv2_drop", conv2_drop);      
+        register_module("fc1", fc1);
+        register_module("fc2", fc2);
+    }
+
+    torch::Tensor forward(torch::Tensor x) {
+        x = torch::relu(torch::max_pool2d(conv1->forward(x), 2));
+        x = torch::relu(torch::max_pool2d(conv2_drop->forward(conv2->forward(x)), 2));
+        x = x.view({-1, 320});
+        x = torch::relu(fc1->forward(x));
+        x = torch::dropout(x, 0.5, is_training());
+        x = fc2->forward(x);
+        return torch::log_softmax(x, 1);
+    }        
+
+    torch::nn::Conv2d conv1;
+    torch::nn::Conv2d conv2;
+    torch::nn::Dropout2d conv2_drop;
+    torch::nn::Linear fc1;
+    torch::nn::Linear fc2;
+};
+
 
 int main(int argc, char *argv[])
 {
@@ -42,10 +76,7 @@ int main(int argc, char *argv[])
     // float constant = (float)std::atof(argv[1]);
     // float gamma = (float)std::atof(argv[2]);
     float parameter = (float)std::atof(argv[1]);
-
-    auto D_in = 784;  // dimension of input layer
-    auto H = 128;     // dimension of hidden layer
-    auto D_out = 10;  // dimension of output layer
+    int file_write = (int)std::atoi(argv[2]);
 
     // history at sender and receiver
     auto sent_history = 2;
@@ -94,7 +125,7 @@ int main(int argc, char *argv[])
     auto num_train_samples_per_pe = dataset.size().value() / numranks;
 
     // Generate dataloader
-    auto batch_size = num_train_samples_per_pe;
+    auto batch_size = 16; //num_train_samples_per_pe;
     auto data_loader = torch::data::make_data_loader(std::move(dataset),
                                                      data_sampler, batch_size);
 
@@ -105,7 +136,17 @@ int main(int argc, char *argv[])
 
     auto sz = model->named_parameters().size();
     auto param = model->named_parameters();
-    auto num_elem_param = (H * D_in + H) + (D_out * H + D_out);
+
+    // counting total number of elements in the model
+    int num_elem_param = 0;
+    for (int i = 0; i < sz; i++) {
+        num_elem_param += param[i].value().numel();
+    }
+    if (rank == 0) {
+        std::cout << "Number of parameters - " << sz << std::endl;
+        std::cout << "Number of elements - " << num_elem_param << std::endl;
+    }
+
     auto param_elem_size = param[0].value().element_size();
 
     // create memory window for parameters from left and right (STILL CASTING AS
@@ -142,6 +183,10 @@ int main(int argc, char *argv[])
     float right_last_recv_iters[sz];
     float right_recv_slopes[num_elem_param][recv_history];
 
+    // norm of current values at the receiver
+    float left_recv_norm[sz];
+    float right_recv_norm[sz];
+
     // initializing values
     for (int i = 0; i < sz; i++) {
         last_sent_values_norm[i] = 0.0;
@@ -152,6 +197,9 @@ int main(int argc, char *argv[])
 
         left_last_recv_iters[i] = 0.0;
         right_last_recv_iters[i] = 0.0;
+
+        left_recv_norm[i] = 0.0;
+        right_recv_norm[i] = 0.0;
 
         thres[i] = 0.0;
 
@@ -172,37 +220,41 @@ int main(int argc, char *argv[])
 
     auto learning_rate = 1e-2;
 
-    torch::optim::SGD optimizer(model->parameters(), learning_rate);
+    //torch::optim::SGD optimizer(model->parameters(), learning_rate);
+    torch::optim::SGD optimizer(
+      model->parameters(), torch::optim::SGDOptions(0.01).momentum(0.5));
 
     // File writing
-    int file_write = 0;
-    char values[30], stats[30], pe_str[3];
+    char send_name[30], recv_name[30], pe_str[3];
 
-    std::ofstream fp;
-    std::ofstream fp2;
+    std::ofstream fps; //file for sending log
+    std::ofstream fpr; //file for receiving log
 
     sprintf(pe_str, "%d", rank);
 
-    strcpy(values, "values");
-    strcat(values, pe_str);
-    strcat(values, ".txt");
+    strcpy(send_name, "send");
+    strcat(send_name, pe_str);
+    strcat(send_name, ".txt");
 
-    strcpy(stats, "stats");
-    strcat(stats, pe_str);
-    strcat(stats, ".txt");
+    strcpy(recv_name, "recv");
+    strcat(recv_name, pe_str);
+    strcat(recv_name, ".txt");
 
     if (file_write == 1) {
-        fp.open(values);
-        fp2.open(stats);
+        fps.open(send_name);
+        fpr.open(recv_name);
     }
     // end file writing
 
     // Number of epochs
-    auto num_epochs = 250;
+    auto num_epochs = 10; //250;
+
+    // Previous epochs + pass number through current epoch 
+    auto pass_num = 0;
 
     // Number of epochs where event condition not verified (due to starting
     // oscillations)
-    auto initial_comm_epochs = 30;
+    auto initial_comm_passes = 30;
 
     int num_events = 0;
 
@@ -213,6 +265,8 @@ int main(int argc, char *argv[])
         int num_correct = 0;
 
         for (auto &batch : *data_loader) {
+            pass_num++;
+
             auto ip = batch.data;
             auto op = batch.target.squeeze();
 
@@ -231,25 +285,26 @@ int main(int argc, char *argv[])
 
             auto loss = torch::nll_loss(torch::log_softmax(prediction, 1), op);
 
+            /*
             // Print loss
             if (epoch % 1 == 0 && file_write == 1) {
-                // fp << "Output at epoch " << epoch << " = " <<
-                // loss.item<float>() << std::endl;
-                fp << epoch << ", " << loss.item<float>() << std::endl;
+                fps << epoch << ", " << loss.item<float>() << std::endl;
             }
+            */
 
             // Backpropagation
             loss.backward();
 
             int disp = 0;  // running displacement for RMA window
+
+            // parameter loop
             for (auto i = 0; i < sz; i++) {
                 // getting dimensions of tensor
-                int dim0, dim1;
-                dim0 = param[i].value().size(0);
-                if (param[i].value().dim() > 1) {
-                    dim1 = param[i].value().size(1);
-                } else {
-                    dim1 = 1;
+                      
+                int num_dim = param[i].value().dim();
+                std::vector<int64_t> dim_array;
+                for (int j = 0; j < num_dim; j++) {
+                    dim_array.push_back(param[i].value().size(j));
                 }
 
                 // flattening the tensor and copying it to a 1-D vector
@@ -265,16 +320,20 @@ int main(int argc, char *argv[])
                 auto curr_norm = torch::norm(flat).item<float>();
                 auto value_diff =
                     std::fabs(curr_norm - last_sent_values_norm[i]);
-                auto iter_diff = epoch - last_sent_iters[i];
+                auto iter_diff = pass_num - last_sent_iters[i];
 
                 thres[i] = thres[i] * std::pow(parameter, iter_diff);
+
+                // Printing value of norm of current parameter
+                if (file_write == 1) {
+                   fps << curr_norm << ",  " << thres[i] << ",  ";
+                }
 
                 // SENDING OPERATIONS
                 // event - based on norm of current parameter
                 if (value_diff >= thres[i] ||
-                    epoch < initial_comm_epochs) {
+                    pass_num < initial_comm_passes) {
                     num_events += 2;  // for both left and right neighbors
-
 
                     // PUSH ENTIRE MSG
                     // send to left
@@ -293,24 +352,6 @@ int main(int argc, char *argv[])
                     // MPI_Win_flush(right, win);
                     MPI_Win_unlock(right, win);
 
-                    /*
-                    //PUSH ONE BY ONE
-                    for(int j = 0; j < flat.numel(); j++)
-                    {
-                       //send to left
-                       MPI_Win_lock(MPI_LOCK_EXCLUSIVE, left, 0, win);
-                       MPI_Put((temp + j), 1, MPI_FLOAT, left, (num_elem_param +
-                    disp + j), 1, MPI_FLOAT, win); MPI_Win_flush(left, win);
-                       MPI_Win_unlock(left, win);
-
-                       //send to right
-                       MPI_Win_lock(MPI_LOCK_EXCLUSIVE, right, 0, win);
-                       MPI_Put((temp + j), 1, MPI_FLOAT, right, (disp + j), 1,
-                    MPI_FLOAT, win); MPI_Win_flush(right, win);
-                       MPI_Win_unlock(right, win);
-                    }
-                    */
-
                     // Shifting previous slope values
                     auto slope_avg = 0.0;
                     int j = 0;
@@ -325,12 +366,22 @@ int main(int argc, char *argv[])
                     slope_avg = slope_avg / sent_history;
 
                     // Calculating new threshold
-                    thres[i] = slope_avg;
+                    thres[i] = 0.5e-3; //slope_avg;
 
                     // update last communicated parameters
                     last_sent_values_norm[i] = curr_norm;
-                    last_sent_iters[i] = epoch;
+                    last_sent_iters[i] = pass_num;
+
+                    //record that an event was triggered
+                    if(file_write == 1) {
+                      fps << "1,  ";
+                    }
                 }
+                else {
+                    if(file_write == 1) {
+                        fps << "0,  ";
+                    }
+                } //end send
 
                 // RECEIVING OPERATIONS
                 // unpack 1-D vector from corresponding displacement and form
@@ -339,32 +390,45 @@ int main(int argc, char *argv[])
                 // Left neighbor
                 auto left_recv = (float *)calloc(
                     flat.numel(), flat.numel() * param_elem_size);
-                auto left_norm = 0.0;
+                float left_temp = 0.0;
                 for (int j = 0; j < flat.numel(); j++) {
                     *(left_recv + j) = *(win_mem + disp + j);
-                    left_norm += std::pow(*(left_recv + j), 2);
+                    left_temp += std::pow(*(left_recv + j), 2);
                 }
-                left_norm = std::sqrt(left_norm / flat.numel());
+                left_temp = std::sqrt(left_temp / flat.numel());
+                left_recv_norm[i] = left_temp;
+                auto left_recv_diff = std::fabs(left_recv_norm[i] - left_last_recv_values_norm[i]);
 
-                if (std::fabs(left_norm - left_last_recv_values_norm[i]) > 0) {
+                if (left_recv_diff > 0) {
                     // new value from left received
 
                     // shift old values
                     int j, k;
                     for (j = 0; j < flat.numel(); j++) {
-                        for (k = 0; k < recv_history; k++) {
+                        // shifting old slopes
+                        for (k = 0; k < recv_history - 1; k++) {
                             left_recv_slopes[disp + j][k] =
                                 left_recv_slopes[disp + j][k + 1];
                         }
+                        // calculating new slope
                         left_recv_slopes[disp + j][k] =
                             (left_recv[j] - left_last_recv_values[disp + j]) /
-                            (epoch - left_last_recv_iters[i]);
+                            (pass_num - left_last_recv_iters[i]);
                         left_last_recv_values[disp + j] = left_recv[j];
                     }
 
-                    left_last_recv_values_norm[i] = left_norm;
-                    left_last_recv_iters[i] = epoch;
-                } else {
+                    left_last_recv_values_norm[i] = left_recv_norm[i];
+                    left_last_recv_iters[i] = pass_num;
+
+                    // Record that new value is received
+                    /*
+                    if (file_write == 1) {
+                       fpr << "1,  ";
+                    }
+                    */
+                }/*   else {
+                    left_temp = 0;
+                    
                     for (int j = 0; j < flat.numel(); j++) {
                         auto slope_avg = 0.0;
                         for (int k = 0; k < recv_history; k++) {
@@ -375,44 +439,69 @@ int main(int argc, char *argv[])
                         left_recv[j] =
                             left_last_recv_values[disp + j] +
                             slope_avg * (epoch - left_last_recv_iters[i]);
+
+                        //compute extrapolated norm
+                        left_temp += std::pow(*(left_recv + j), 2);
                     }
+                    left_temp = std::sqrt(left_temp / flat.numel());
+
+                    // Record that extrapolation is done
+                    if (file_write == 1) {
+                       fpr << "0,  ";
+                    }
+                } //end left recv */
+
+                // Writing value received
+                if (file_write == 1) {
+                   fpr << left_temp << ",  "; // << left_recv_diff << ",  ";
                 }
 
                 // forming left tensor - either new message or extrapolated
                 torch::Tensor left_tensor =
-                    torch::from_blob(left_recv, {dim0, dim1}, torch::kFloat)
+                    torch::from_blob(left_recv, dim_array, torch::kFloat)
                         .clone();
 
                 // RIGHT NEIGHBOR
                 auto right_recv = (float *)calloc(
                     flat.numel(), flat.numel() * param_elem_size);
-                auto right_norm = 0.0;
+                float right_temp = 0.0;
                 for (int j = 0; j < flat.numel(); j++) {
                     *(right_recv + j) = *(win_mem + num_elem_param + disp + j);
-                    right_norm += std::pow(*(right_recv + j), 2);
+                    right_temp += std::pow(*(right_recv + j), 2);
                 }
-                right_norm = std::sqrt(right_norm / flat.numel());
+                right_temp = std::sqrt(right_temp / flat.numel());
+                right_recv_norm[i] = right_temp;
+                auto right_recv_diff = std::fabs(right_recv_norm[i] - right_last_recv_values_norm[i]);
 
-                if (std::fabs(right_norm - right_last_recv_values_norm[i]) >
+                if (right_recv_diff >
                     0) {
                     // new value from right received
 
                     // shift old values
                     int j, k;
                     for (j = 0; j < flat.numel(); j++) {
-                        for (k = 0; k < recv_history; k++) {
+                        for (k = 0; k < recv_history - 1; k++) {
                             right_recv_slopes[disp + j][k] =
                                 right_recv_slopes[disp + j][k + 1];
                         }
                         right_recv_slopes[disp + j][k] =
                             (right_recv[j] - right_last_recv_values[disp + j]) /
-                            (epoch - right_last_recv_iters[i]);
+                            (pass_num - right_last_recv_iters[i]);
                         right_last_recv_values[disp + j] = right_recv[j];
                     }
 
-                    right_last_recv_values_norm[i] = right_norm;
-                    right_last_recv_iters[i] = epoch;
-                } else {
+                    right_last_recv_values_norm[i] = right_recv_norm[i];
+                    right_last_recv_iters[i] = pass_num;
+
+                    //record that new value is received
+                    /*
+                    if (file_write == 1) {
+                       fpr << "1,  ";
+                    }
+                    */
+                }/*  else {
+                    right_temp = 0;
+
                     for (int j = 0; j < flat.numel(); j++) {
                         auto slope_avg = 0.0;
                         for (int k = 0; k < recv_history; k++) {
@@ -423,16 +512,30 @@ int main(int argc, char *argv[])
                         right_recv[j] =
                             right_last_recv_values[disp + j] +
                             slope_avg * (epoch - right_last_recv_iters[i]);
+
+                        // extrapolated norm
+                        right_temp += std::pow(*(right_recv + j), 2);
                     }
+                    right_temp = std::sqrt(right_temp / flat.numel());   
+
+                    //record that extrpolation is done
+                    if (file_write == 1) {
+                       fpr << "0,  ";
+                    }
+                } //end right recv */
+
+                //writing value received
+                if (file_write == 1) {
+                   fpr << right_temp << ",  "; // << right_recv_diff << ",  ";
                 }
 
                 // forming right tensor - new message or extrapolated
                 torch::Tensor right_tensor =
-                    torch::from_blob(right_recv, {dim0, dim1}, torch::kFloat)
+                    torch::from_blob(right_recv, dim_array, torch::kFloat)
                         .clone();
 
-                left_tensor.squeeze_();
-                right_tensor.squeeze_();
+                //left_tensor.squeeze_();
+                //right_tensor.squeeze_();
 
                 // averaging with neighbors
                 param[i].value().data().add_(left_tensor.data());
@@ -446,6 +549,11 @@ int main(int argc, char *argv[])
                 free(temp);
                 free(left_recv);
                 free(right_recv);
+            } //end parameter loop
+
+            if (file_write == 1) {
+               fps << std::endl;
+               fpr << std::endl;
             }
 
             // Update parameters
@@ -454,23 +562,12 @@ int main(int argc, char *argv[])
             // Accuracy
             auto guess = prediction.argmax(1);
             num_correct += torch::sum(guess.eq_(op)).item<int64_t>();
+
         }  // end batch loader
 
         auto accuracy = 100.0 * num_correct / num_train_samples_per_pe;
 
-        if (file_write == 1) fp << epoch << ", " << accuracy << std::endl;
-
-        // Printing parameters to file
-        auto param0 = torch::norm(param[0].value()).item<float>();
-        auto param1 = torch::norm(param[1].value()).item<float>();
-        auto param2 = torch::norm(param[2].value()).item<float>();
-        auto param3 = torch::norm(param[3].value()).item<float>();
-
-
-        if (file_write == 1)
-            fp2 << epoch << ", " << param0 << ", " << param1 << ", " << param2
-                << ", " << param3 << std::endl;
-
+        std::cout << epoch << ", " << accuracy << std::endl;
 
     }  // end epochs
 
@@ -480,13 +577,12 @@ int main(int argc, char *argv[])
         std::cout << "Training time - " << (tend - tstart) << std::endl;
 
     // Print event stats
-    // fp2 << "No of events - " << num_events << std::endl;
     std::cout << "No of events in rank " << rank << " - " << num_events
               << std::endl;
 
     if (file_write == 1) {
-        fp.close();
-        fp2.close();
+        fps.close();
+        fpr.close();
     }
 
     // Averaging learnt model - relevant only for rank 0
@@ -503,8 +599,9 @@ int main(int argc, char *argv[])
     // Accumulating number of events in all PEs
     MPI_Allreduce(MPI_IN_PLACE, &num_events, 1, MPI_INT, MPI_SUM,
                   MPI_COMM_WORLD);
-    if (rank == 0)
+    if (rank == 0) {
         std::cout << "Total number of events - " << num_events << std::endl;
+    }
 
     // Testing only in rank 0
     if (rank == 0) {
@@ -563,6 +660,7 @@ int main(int argc, char *argv[])
     MPI_Finalize();
 }
 
+/*
 float findThreshold(int epochs, float constant, float gamma)
 {
     float thres = 0.0;
@@ -572,3 +670,4 @@ float findThreshold(int epochs, float constant, float gamma)
     thres = constant * pow(gamma, epochs);
     return thres;
 }
+*/
