@@ -5,8 +5,6 @@
 #define LTAG 2
 #define RTAG 10
 
-float dummyFunc(int, float, float);
-
 std::map<at::ScalarType, MPI_Datatype> mpiDatatype = {
     {at::kByte, MPI_UNSIGNED_CHAR},
     {at::kChar, MPI_CHAR},
@@ -42,9 +40,8 @@ struct Model : torch::nn::Module {
 
 int main(int argc, char *argv[])
 {
-    auto D_in = 784;  // dimension of input layer
-    auto H = 128;     // dimension of hidden layer
-    auto D_out = 10;  // dimension of output layer
+
+    int file_write = (int)std::atoi(argv[1]);
 
     // MPI variables
     int rank, numranks;
@@ -73,7 +70,6 @@ int main(int argc, char *argv[])
     auto tend = 0.0;
 
     // Read dataset
-    // std::string filename = "../../../mnist/data";
     std::string filename =
         "/afs/crc.nd.edu/user/s/sghosh2/Public/ML/mnist/data";
     auto dataset =
@@ -99,7 +95,17 @@ int main(int argc, char *argv[])
 
     auto sz = model->named_parameters().size();
     auto param = model->named_parameters();
-    auto num_elem_param = (H * D_in + H) + (D_out * H + D_out);
+    
+    // counting total number of elements in the model
+    int num_elem_param = 0;
+    for (int i = 0; i < sz; i++) {
+        num_elem_param += param[i].value().numel();
+    }
+    if (rank == 0) {
+        std::cout << "Number of parameters - " << sz << std::endl;
+        std::cout << "Number of elements - " << num_elem_param << std::endl;
+    }
+ 
     auto param_elem_size = param[0].value().element_size();
 
     // arrays for storing left and right params
@@ -117,7 +123,6 @@ int main(int argc, char *argv[])
     torch::optim::SGD optimizer(model->parameters(), learning_rate);
 
     // File writing
-    int file_write = 0;
     char name[30], pe_str[3];
     std::ofstream fp;
     sprintf(pe_str, "%d", rank);
@@ -131,7 +136,7 @@ int main(int argc, char *argv[])
     // end file writing
 
     // Number of epochs
-    auto num_epochs = 250;
+    auto num_epochs = 50; //250;
 
     // start timer
     tstart = MPI_Wtime();
@@ -157,10 +162,9 @@ int main(int argc, char *argv[])
             auto loss = torch::nll_loss(torch::log_softmax(prediction, 1), op);
 
             // Print loss
-            if (epoch % 1 == 0 && file_write == 1)
-                std::cout << "Output at epoch " << epoch << " = "
-                          << loss.item<float>() << std::endl;
-            // fp << epoch << ", " << loss.item<float>() << std::endl;
+            if (epoch % 1 == 0 && file_write == 1) {
+                fp << epoch << ", " << loss.item<float>() << std::endl;
+            }
 
             // Backpropagation
             loss.backward();
@@ -168,12 +172,11 @@ int main(int argc, char *argv[])
             int disp = 0;  // displacement of left and right params
             for (auto i = 0; i < sz; i++) {
                 // getting dimensions of tensor
-                int dim0, dim1;
-                dim0 = param[i].value().size(0);
-                if (param[i].value().dim() > 1) {
-                    dim1 = param[i].value().size(1);
-                } else {
-                    dim1 = 1;
+
+                int num_dim = param[i].value().dim();
+                std::vector<int64_t> dim_array;
+                for (int j = 0; j < num_dim; j++) {
+                    dim_array.push_back(param[i].value().size(j));
                 }
 
                 // flattening the tensor and copying it to a 1-D vector
@@ -185,30 +188,17 @@ int main(int argc, char *argv[])
                     *(temp + j) = flat[j].item<float>();
                 }
 
-                // call dummy function - mimicking threshold calc in event
-                auto dummy = dummyFunc(epoch, 0.0, 1.0);
-
-                // send gradients to left
+                // send parameters to left
                 MPI_Issend(temp, flat.numel(), MPI_FLOAT, left, RTAG,
                            MPI_COMM_WORLD, &req1);
 
-                // move receive from left here just to check
-                MPI_Recv((left_param + disp), flat.numel(), MPI_FLOAT, left,
-                         LTAG, MPI_COMM_WORLD, &status);
-
-                // send gradients to right
+                // send parameters to right
                 MPI_Issend(temp, flat.numel(), MPI_FLOAT, right, LTAG,
                            MPI_COMM_WORLD, &req2);
 
-                // MPI_Wait(&req1, &status);
-                // MPI_Wait(&req2, &status);
-
-                /*
-                //receive from left
-                MPI_Recv((left_param + disp), flat.numel(),
-                         MPI_FLOAT,
-                         left, LTAG, MPI_COMM_WORLD, &status);
-                */
+                // receive from left
+                MPI_Recv((left_param + disp), flat.numel(), MPI_FLOAT, left,
+                         LTAG, MPI_COMM_WORLD, &status);
 
                 // receive from right
                 MPI_Recv((right_param + disp), flat.numel(), MPI_FLOAT, right,
@@ -226,7 +216,7 @@ int main(int argc, char *argv[])
                     *(left_recv + j) = *(left_param + disp + j);
                 }
                 torch::Tensor left_tensor =
-                    torch::from_blob(left_recv, {dim0, dim1}, torch::kFloat)
+                    torch::from_blob(left_recv, dim_array, torch::kFloat)
                         .clone();
 
                 auto right_recv = (float *)calloc(
@@ -235,11 +225,8 @@ int main(int argc, char *argv[])
                     *(right_recv + j) = *(right_param + disp + j);
                 }
                 torch::Tensor right_tensor =
-                    torch::from_blob(right_recv, {dim0, dim1}, torch::kFloat)
+                    torch::from_blob(right_recv, dim_array, torch::kFloat)
                         .clone();
-
-                left_tensor.squeeze_();
-                right_tensor.squeeze_();
 
                 // average gradients
                 param[i].value().data().add_(left_tensor.data());
@@ -265,8 +252,9 @@ int main(int argc, char *argv[])
 
         auto accuracy = 100.0 * num_correct / num_train_samples_per_pe;
 
-        if (file_write == 1) fp << epoch << ", " << accuracy << std::endl;
+        std::cout << epoch << ", " << accuracy << std::endl;
 
+        /*
         // Printing parameters to file
         auto param0 = torch::norm(param[0].value()).item<float>();
         auto param1 = torch::norm(param[1].value()).item<float>();
@@ -276,6 +264,7 @@ int main(int argc, char *argv[])
         if (file_write == 1)
             fp << epoch << ", " << param0 << ", " << param1 << ", " << param2
                << ", " << param3 << std::endl;
+        */
 
     }  // end epochs
 
@@ -352,12 +341,4 @@ int main(int argc, char *argv[])
     }  // end rank 0
 
     MPI_Finalize();
-}
-
-// mimicking findThreshold in event
-float dummyFunc(int epochs, float constant, float gamma)
-{
-    float dummy = 0.0;
-    dummy = constant * pow(gamma, epochs);
-    return dummy;
 }
