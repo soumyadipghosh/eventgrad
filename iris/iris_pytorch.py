@@ -8,6 +8,7 @@ the datasets separated in two files from originai datasets:
 iris_train.csv = datasets for training purpose, 80% from the original data
 iris_test.csv  = datasets for testing purpose, 20% from the original data
 """
+
 import pandas as pd
 
 #load
@@ -25,6 +26,7 @@ datatrain_array = datatrain.values
 #split x and y (feature and target)
 xtrain = datatrain_array[:,:4]
 ytrain = datatrain_array[:,4]
+#print(ytrain)
 
 """
 SECTION 2 : Build and Train Model
@@ -71,8 +73,8 @@ optimizer = torch.optim.SGD(net.parameters(), lr=lr)
 
 #train
 for epoch in range(num_epoch):
-    X = Variable(torch.Tensor(xtrain).float())
-    Y = Variable(torch.Tensor(ytrain).long())
+    X = torch.Tensor(xtrain).float()
+    Y = torch.Tensor(ytrain).long() 
 
     #feedforward - backprop
     optimizer.zero_grad()
@@ -80,10 +82,9 @@ for epoch in range(num_epoch):
     loss = criterion(out, Y)
     loss.backward()
     optimizer.step()
-
-    if (epoch) % 50 == 0:
-        print ('Epoch [%d/%d] Loss: %.4f' 
-                   %(epoch+1, num_epoch, loss.item()))
+    acc = 100 * torch.sum(Y==torch.max(out.data, 1)[1]).double() / len(Y)
+    print ('Epoch [%d/%d] Loss: %.4f   Acc: %.4f' 
+                   %(epoch+1, num_epoch, loss.item(), acc.item()))
 
 """
 SECTION 3 : Testing model
@@ -105,10 +106,10 @@ xtest = datatest_array[:,:4]
 ytest = datatest_array[:,4]
 
 #get prediction
-X = Variable(torch.Tensor(xtest).float())
+X = torch.Tensor(xtest).float()
 Y = torch.Tensor(ytest).long()
 out = net(X)
 _, predicted = torch.max(out.data, 1)
 
 #get accuration
-print('Accuracy of the network %d %%' % (100 * torch.sum(Y==predicted) / 30))
+print('Accuracy of the network %d %%' % (100 * torch.sum(Y==predicted) / len(Y)))
