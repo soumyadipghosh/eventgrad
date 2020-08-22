@@ -2,8 +2,6 @@
 #include <iostream>
 #include "mpi.h"
 
-//float findThreshold(int, float, float);
-
 std::map<at::ScalarType, MPI_Datatype> mpiDatatype = {
     {at::kByte, MPI_UNSIGNED_CHAR},
     {at::kChar, MPI_CHAR},
@@ -38,21 +36,23 @@ struct Model : torch::nn::Module {
 };
 */
 
-//Define a Convolutional Module
+/*
+//Stable Convolutional Module
 struct Model : torch::nn::Module {
+    
     Model()
           : conv1(torch::nn::Conv2dOptions(1, 10, 5)),
             conv2(torch::nn::Conv2dOptions(10, 20, 5)),
-            fc1(320, 50),
-            fc2(50, 10) {
+            fc1(320, 100),
+            fc2(100, 10) {
         register_module("conv1", conv1);
         register_module("conv2", conv2);
         register_module("conv2_drop", conv2_drop);      
         register_module("fc1", fc1);
         register_module("fc2", fc2);
     }
-
-    torch::Tensor forward(torch::Tensor x) {
+    
+   torch::Tensor forward(torch::Tensor x) {
         x = torch::relu(torch::max_pool2d(conv1->forward(x), 2));
         x = torch::relu(torch::max_pool2d(conv2_drop->forward(conv2->forward(x)), 2));
         x = x.view({-1, 320});
@@ -68,15 +68,56 @@ struct Model : torch::nn::Module {
     torch::nn::Linear fc1;
     torch::nn::Linear fc2;
 };
+*/
+
+//Experimental Convolutional Module
+struct Model : torch::nn::Module {
+
+    Model()
+          : conv1(torch::nn::Conv2dOptions(1, 10, 3)),
+            conv2(torch::nn::Conv2dOptions(10, 20, 3)),
+            fc1(500, 50),
+            fc2(50, 10) {
+        register_module("conv1", conv1);
+        register_module("conv2", conv2);
+        register_module("conv2_drop", conv2_drop);
+        register_module("fc1", fc1);
+        register_module("fc2", fc2);
+    }
+
+
+    torch::Tensor forward(torch::Tensor x) {
+        x = torch::relu(torch::max_pool2d(conv1->forward(x), 2));
+        x = torch::relu(torch::max_pool2d(conv2_drop->forward(conv2->forward(x)), 2));
+        x = x.view({-1, 500});
+        x = torch::relu(fc1->forward(x));
+        x = torch::dropout(x, 0.5, is_training());
+        x = fc2->forward(x);
+        return torch::log_softmax(x, 1);
+    }
+
+    torch::nn::Conv2d conv1;
+    torch::nn::Conv2d conv2;
+    torch::nn::Dropout2d conv2_drop;
+    torch::nn::Linear fc1;
+    torch::nn::Linear fc2;
+};
 
 
 int main(int argc, char *argv[])
 {
     // parsing runtime args
-    // float constant = (float)std::atof(argv[1]);
-    // float gamma = (float)std::atof(argv[2]);
-    float parameter = (float)std::atof(argv[1]);
-    int file_write = (int)std::atoi(argv[2]);
+    int file_write = (int)std::atoi(argv[1]);    
+    int thres_type = (int)std::atoi(argv[2]); // 0 for non-adaptive, 1 for adaptive
+
+    float parameter, constant, gamma;
+    
+    if(thres_type == 1) {
+       parameter = (float)std::atof(argv[3]); // adaptive threshold
+    } else {
+       constant = (float)std::atof(argv[3]); //non-adaptive constant threshold
+       gamma = (float)std::atof(argv[4]);
+    }
 
     // history at sender and receiver
     auto sent_history = 2;
@@ -110,7 +151,6 @@ int main(int argc, char *argv[])
     auto tend = 0.0;
 
     // Read dataset
-    // std::string filename = "../../../mnist/data";
     std::string filename =
         "/afs/crc.nd.edu/user/s/sghosh2/Public/ML/mnist/data";
     auto dataset =
@@ -125,7 +165,7 @@ int main(int argc, char *argv[])
     auto num_train_samples_per_pe = dataset.size().value() / numranks;
 
     // Generate dataloader
-    auto batch_size = 16; //num_train_samples_per_pe;
+    auto batch_size = 64; //16; //num_train_samples_per_pe;
     auto data_loader = torch::data::make_data_loader(std::move(dataset),
                                                      data_sampler, batch_size);
 
@@ -222,7 +262,7 @@ int main(int argc, char *argv[])
 
     //torch::optim::SGD optimizer(model->parameters(), learning_rate);
     torch::optim::SGD optimizer(
-      model->parameters(), torch::optim::SGDOptions(0.01).momentum(0.5));
+      model->parameters(), torch::optim::SGDOptions(0.05)); //.momentum(0.5));
 
     // File writing
     char send_name[30], recv_name[30], pe_str[3];
@@ -322,7 +362,11 @@ int main(int argc, char *argv[])
                     std::fabs(curr_norm - last_sent_values_norm[i]);
                 auto iter_diff = pass_num - last_sent_iters[i];
 
-                thres[i] = thres[i] * std::pow(parameter, iter_diff);
+                if (thres_type == 1) {
+                    thres[i] = thres[i] * std::pow(parameter, iter_diff);
+                } else {
+                    thres[i] = constant * std::pow(gamma, epoch);
+                }
 
                 // Printing value of norm of current parameter
                 if (file_write == 1) {
@@ -365,8 +409,10 @@ int main(int argc, char *argv[])
                     slope_avg += sent_slopes_norm[i][j];
                     slope_avg = slope_avg / sent_history;
 
-                    // Calculating new threshold
-                    thres[i] = 0.5e-3; //slope_avg;
+                    // Calculating new threshold if adaptive
+                    if(thres_type == 1) {
+                        thres[i] = slope_avg;
+                    }
 
                     // update last communicated parameters
                     last_sent_values_norm[i] = curr_norm;
@@ -615,7 +661,7 @@ int main(int argc, char *argv[])
         auto test_loader = torch::data::make_data_loader(
             std::move(test_dataset), num_test_samples);
 
-        model->eval();
+        model->eval(); //enabling evaluation mode to prevent backpropagation
 
         int num_correct = 0;
 
@@ -659,15 +705,3 @@ int main(int argc, char *argv[])
 
     MPI_Finalize();
 }
-
-/*
-float findThreshold(int epochs, float constant, float gamma)
-{
-    float thres = 0.0;
-    // float gamma = 0.9;
-    // float constant = 1e-2;
-
-    thres = constant * pow(gamma, epochs);
-    return thres;
-}
-*/
