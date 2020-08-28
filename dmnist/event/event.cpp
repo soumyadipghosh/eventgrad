@@ -13,33 +13,9 @@ std::map<at::ScalarType, MPI_Datatype> mpiDatatype = {
 };
 
 /*
-// Define a completely Linear Module.
+// CNN-1 used in EventGraD paper
 struct Model : torch::nn::Module {
-    Model()
-    {
-        // Construct and register Linear submodules.
-        fc1 = register_module("fc1", torch::nn::Linear(784, 128));
-        fc2 = register_module("fc2", torch::nn::Linear(128, 10));
-    }
 
-    // Implement the Net's algorithm.
-    torch::Tensor forward(torch::Tensor x)
-    {
-        // Use one of many tensor manipulation functions.
-        x = torch::relu(fc1->forward(x.reshape({x.size(0), 784})));
-        x = torch::relu(fc2->forward(x));
-        return x;
-    }
-
-    // Use one of many "standard library" modules.
-    torch::nn::Linear fc1{nullptr}, fc2{nullptr};
-};
-*/
-
-/*
-//Stable Convolutional Module
-struct Model : torch::nn::Module {
-    
     Model()
           : conv1(torch::nn::Conv2dOptions(1, 10, 5)),
             conv2(torch::nn::Conv2dOptions(10, 20, 5)),
@@ -47,20 +23,18 @@ struct Model : torch::nn::Module {
             fc2(100, 10) {
         register_module("conv1", conv1);
         register_module("conv2", conv2);
-        register_module("conv2_drop", conv2_drop);      
+        register_module("conv2_drop", conv2_drop);
         register_module("fc1", fc1);
         register_module("fc2", fc2);
     }
-    
+
    torch::Tensor forward(torch::Tensor x) {
         x = torch::relu(torch::max_pool2d(conv1->forward(x), 2));
-        x = torch::relu(torch::max_pool2d(conv2_drop->forward(conv2->forward(x)), 2));
-        x = x.view({-1, 320});
-        x = torch::relu(fc1->forward(x));
-        x = torch::dropout(x, 0.5, is_training());
-        x = fc2->forward(x);
-        return torch::log_softmax(x, 1);
-    }        
+        x =
+torch::relu(torch::max_pool2d(conv2_drop->forward(conv2->forward(x)), 2)); x =
+x.view({-1, 320}); x = torch::relu(fc1->forward(x)); x = torch::dropout(x, 0.5,
+is_training()); x = fc2->forward(x); return torch::log_softmax(x, 1);
+    }
 
     torch::nn::Conv2d conv1;
     torch::nn::Conv2d conv2;
@@ -70,14 +44,14 @@ struct Model : torch::nn::Module {
 };
 */
 
-//Experimental Convolutional Module
+// CNN-2 used in EventGraD paper
 struct Model : torch::nn::Module {
-
     Model()
-          : conv1(torch::nn::Conv2dOptions(1, 10, 3)),
-            conv2(torch::nn::Conv2dOptions(10, 20, 3)),
-            fc1(500, 50),
-            fc2(50, 10) {
+        : conv1(torch::nn::Conv2dOptions(1, 10, 3)),
+          conv2(torch::nn::Conv2dOptions(10, 20, 3)),
+          fc1(500, 50),
+          fc2(50, 10)
+    {
         register_module("conv1", conv1);
         register_module("conv2", conv2);
         register_module("conv2_drop", conv2_drop);
@@ -86,9 +60,11 @@ struct Model : torch::nn::Module {
     }
 
 
-    torch::Tensor forward(torch::Tensor x) {
+    torch::Tensor forward(torch::Tensor x)
+    {
         x = torch::relu(torch::max_pool2d(conv1->forward(x), 2));
-        x = torch::relu(torch::max_pool2d(conv2_drop->forward(conv2->forward(x)), 2));
+        x = torch::relu(
+            torch::max_pool2d(conv2_drop->forward(conv2->forward(x)), 2));
         x = x.view({-1, 500});
         x = torch::relu(fc1->forward(x));
         x = torch::dropout(x, 0.5, is_training());
@@ -107,21 +83,21 @@ struct Model : torch::nn::Module {
 int main(int argc, char *argv[])
 {
     // parsing runtime args
-    int file_write = (int)std::atoi(argv[1]);    
-    int thres_type = (int)std::atoi(argv[2]); // 0 for non-adaptive, 1 for adaptive
+    int file_write = (int)std::atoi(argv[1]);
+    int thres_type =
+        (int)std::atoi(argv[2]);  // 0 for non-adaptive, 1 for adaptive
 
-    float parameter, constant, gamma;
-    
-    if(thres_type == 1) {
-       parameter = (float)std::atof(argv[3]); // adaptive threshold
+    float horizon, constant;
+
+    if (thres_type == 1) {
+        horizon = (float)std::atof(argv[3]);  // adaptive threshold
     } else {
-       constant = (float)std::atof(argv[3]); //non-adaptive constant threshold
-       gamma = (float)std::atof(argv[4]);
+        constant = (float)std::atof(argv[3]);  // non-adaptive constant
+                                               // threshold
     }
 
-    // history at sender and receiver
+    // history at sender
     auto sent_history = 2;
-    auto recv_history = 2;
 
     // MPI variables
     int rank, numranks;
@@ -129,8 +105,6 @@ int main(int argc, char *argv[])
     MPI_Init(&argc, &argv);
     MPI_Comm_size(MPI_COMM_WORLD, &numranks);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Status status;
-    MPI_Request req1, req2;
     MPI_Win win;
 
     // ring arrangement
@@ -158,18 +132,18 @@ int main(int argc, char *argv[])
             .map(torch::data::transforms::Normalize<>(0.1307, 0.3081))
             .map(torch::data::transforms::Stack<>());
 
-    // Distributed Random Sampler - use sequential for just gradient descent
+    // Distributed Sampler
     auto data_sampler = torch::data::samplers::DistributedSequentialSampler(
         dataset.size().value(), numranks, rank, false);
 
     auto num_train_samples_per_pe = dataset.size().value() / numranks;
 
     // Generate dataloader
-    auto batch_size = 64; //16; //num_train_samples_per_pe;
+    auto batch_size = 64;  // num_train_samples_per_pe;
     auto data_loader = torch::data::make_data_loader(std::move(dataset),
                                                      data_sampler, batch_size);
 
-    // sets manual seed - randomness in sgd later ?
+    // sets manual seed
     torch::manual_seed(0);
 
     auto model = std::make_shared<Model>();
@@ -189,10 +163,8 @@ int main(int argc, char *argv[])
 
     auto param_elem_size = param[0].value().element_size();
 
-    // create memory window for parameters from left and right (STILL CASTING AS
-    // FLOAT TYPE)
+    // create memory window for parameters from left and right
     auto win_size = 2 * num_elem_param;
-    // auto win_mem = (float*)calloc(win_size, win_size*param_elem_size);
     float *win_mem;
     MPI_Alloc_mem(win_size * param_elem_size, MPI_INFO_NULL, &win_mem);
     MPI_Win_create(win_mem, win_size * param_elem_size, param_elem_size,
@@ -206,24 +178,20 @@ int main(int argc, char *argv[])
     // Threshold
     float thres[sz];
 
-    // history of values at the sender - to estimate the threshold
+    // variables at the sender
     float last_sent_values_norm[sz];
     float last_sent_iters[sz];
     float sent_slopes_norm[sz][sent_history];
 
-    // history of values at the receiver - to extrapolate parameters between new
-    // messages
+    // variables at the receiver
     float left_last_recv_values[num_elem_param];
     float left_last_recv_values_norm[sz];
     float left_last_recv_iters[sz];
-    float left_recv_slopes[num_elem_param][recv_history];
 
     float right_last_recv_values[num_elem_param];
     float right_last_recv_values_norm[sz];
     float right_last_recv_iters[sz];
-    float right_recv_slopes[num_elem_param][recv_history];
 
-    // norm of current values at the receiver
     float left_recv_norm[sz];
     float right_recv_norm[sz];
 
@@ -251,24 +219,18 @@ int main(int argc, char *argv[])
     for (int i = 0; i < num_elem_param; i++) {
         left_last_recv_values[i] = 0.0;
         right_last_recv_values[i] = 0.0;
-
-        for (int j = 0; j < recv_history; j++) {
-            left_recv_slopes[i][j] = 0.0;
-            right_recv_slopes[i][j] = 0.0;
-        }
     }
 
-    auto learning_rate = 1e-2;
+    auto learning_rate = 0.05;
 
-    //torch::optim::SGD optimizer(model->parameters(), learning_rate);
-    torch::optim::SGD optimizer(
-      model->parameters(), torch::optim::SGDOptions(0.05)); //.momentum(0.5));
+    torch::optim::SGD optimizer(model->parameters(),
+                                torch::optim::SGDOptions(learning_rate));
 
     // File writing
     char send_name[30], recv_name[30], pe_str[3];
 
-    std::ofstream fps; //file for sending log
-    std::ofstream fpr; //file for receiving log
+    std::ofstream fps;  // file for sending log
+    std::ofstream fpr;  // file for receiving log
 
     sprintf(pe_str, "%d", rank);
 
@@ -287,9 +249,9 @@ int main(int argc, char *argv[])
     // end file writing
 
     // Number of epochs
-    auto num_epochs = 10; //250;
+    auto num_epochs = 10;
 
-    // Previous epochs + pass number through current epoch 
+    // Previous epochs + pass number through current epoch
     auto pass_num = 0;
 
     // Number of epochs where event condition not verified (due to starting
@@ -340,7 +302,7 @@ int main(int argc, char *argv[])
             // parameter loop
             for (auto i = 0; i < sz; i++) {
                 // getting dimensions of tensor
-                      
+
                 int num_dim = param[i].value().dim();
                 std::vector<int64_t> dim_array;
                 for (int j = 0; j < num_dim; j++) {
@@ -363,26 +325,24 @@ int main(int argc, char *argv[])
                 auto iter_diff = pass_num - last_sent_iters[i];
 
                 if (thres_type == 1) {
-                    thres[i] = thres[i] * std::pow(parameter, iter_diff);
+                    thres[i] = thres[i] * horizon;
                 } else {
-                    thres[i] = constant * std::pow(gamma, epoch);
+                    thres[i] = constant;
                 }
 
                 // Printing value of norm of current parameter
                 if (file_write == 1) {
-                   fps << curr_norm << ",  " << thres[i] << ",  ";
+                    fps << curr_norm << ",  " << thres[i] << ",  ";
                 }
 
                 // SENDING OPERATIONS
                 // event - based on norm of current parameter
-                if (value_diff >= thres[i] ||
-                    pass_num < initial_comm_passes) {
+                if (value_diff >= thres[i] || pass_num < initial_comm_passes) {
                     num_events += 2;  // for both left and right neighbors
 
                     // PUSH ENTIRE MSG
                     // send to left
-                    MPI_Win_lock(MPI_LOCK_SHARED, left, 0,
-                                 win);
+                    MPI_Win_lock(MPI_LOCK_SHARED, left, 0, win);
                     MPI_Put(temp, flat.numel(), MPI_FLOAT, left,
                             (num_elem_param + disp), flat.numel(), MPI_FLOAT,
                             win);
@@ -410,7 +370,7 @@ int main(int argc, char *argv[])
                     slope_avg = slope_avg / sent_history;
 
                     // Calculating new threshold if adaptive
-                    if(thres_type == 1) {
+                    if (thres_type == 1) {
                         thres[i] = slope_avg;
                     }
 
@@ -418,16 +378,15 @@ int main(int argc, char *argv[])
                     last_sent_values_norm[i] = curr_norm;
                     last_sent_iters[i] = pass_num;
 
-                    //record that an event was triggered
-                    if(file_write == 1) {
-                      fps << "1,  ";
+                    // record that an event was triggered
+                    if (file_write == 1) {
+                        fps << "1,  ";
                     }
-                }
-                else {
-                    if(file_write == 1) {
+                } else {
+                    if (file_write == 1) {
                         fps << "0,  ";
                     }
-                } //end send
+                }  // end send
 
                 // RECEIVING OPERATIONS
                 // unpack 1-D vector from corresponding displacement and form
@@ -443,66 +402,27 @@ int main(int argc, char *argv[])
                 }
                 left_temp = std::sqrt(left_temp / flat.numel());
                 left_recv_norm[i] = left_temp;
-                auto left_recv_diff = std::fabs(left_recv_norm[i] - left_last_recv_values_norm[i]);
+                auto left_recv_diff = std::fabs(left_recv_norm[i] -
+                                                left_last_recv_values_norm[i]);
 
                 if (left_recv_diff > 0) {
                     // new value from left received
-
-                    // shift old values
-                    int j, k;
-                    for (j = 0; j < flat.numel(); j++) {
-                        // shifting old slopes
-                        for (k = 0; k < recv_history - 1; k++) {
-                            left_recv_slopes[disp + j][k] =
-                                left_recv_slopes[disp + j][k + 1];
-                        }
-                        // calculating new slope
-                        left_recv_slopes[disp + j][k] =
-                            (left_recv[j] - left_last_recv_values[disp + j]) /
-                            (pass_num - left_last_recv_iters[i]);
-                        left_last_recv_values[disp + j] = left_recv[j];
-                    }
 
                     left_last_recv_values_norm[i] = left_recv_norm[i];
                     left_last_recv_iters[i] = pass_num;
 
                     // Record that new value is received
-                    /*
                     if (file_write == 1) {
-                       fpr << "1,  ";
+                        fpr << "1,  ";
                     }
-                    */
-                }/*   else {
-                    left_temp = 0;
-                    
-                    for (int j = 0; j < flat.numel(); j++) {
-                        auto slope_avg = 0.0;
-                        for (int k = 0; k < recv_history; k++) {
-                            slope_avg += left_recv_slopes[disp + j][k];
-                        }
-                        slope_avg = slope_avg / recv_history;
-
-                        left_recv[j] =
-                            left_last_recv_values[disp + j] +
-                            slope_avg * (epoch - left_last_recv_iters[i]);
-
-                        //compute extrapolated norm
-                        left_temp += std::pow(*(left_recv + j), 2);
-                    }
-                    left_temp = std::sqrt(left_temp / flat.numel());
-
-                    // Record that extrapolation is done
-                    if (file_write == 1) {
-                       fpr << "0,  ";
-                    }
-                } //end left recv */
+                }
 
                 // Writing value received
                 if (file_write == 1) {
-                   fpr << left_temp << ",  "; // << left_recv_diff << ",  ";
+                    fpr << left_temp << ",  ";  // << left_recv_diff << ",  ";
                 }
 
-                // forming left tensor - either new message or extrapolated
+                // forming left tensor
                 torch::Tensor left_tensor =
                     torch::from_blob(left_recv, dim_array, torch::kFloat)
                         .clone();
@@ -517,71 +437,30 @@ int main(int argc, char *argv[])
                 }
                 right_temp = std::sqrt(right_temp / flat.numel());
                 right_recv_norm[i] = right_temp;
-                auto right_recv_diff = std::fabs(right_recv_norm[i] - right_last_recv_values_norm[i]);
+                auto right_recv_diff = std::fabs(
+                    right_recv_norm[i] - right_last_recv_values_norm[i]);
 
-                if (right_recv_diff >
-                    0) {
+                if (right_recv_diff > 0) {
                     // new value from right received
-
-                    // shift old values
-                    int j, k;
-                    for (j = 0; j < flat.numel(); j++) {
-                        for (k = 0; k < recv_history - 1; k++) {
-                            right_recv_slopes[disp + j][k] =
-                                right_recv_slopes[disp + j][k + 1];
-                        }
-                        right_recv_slopes[disp + j][k] =
-                            (right_recv[j] - right_last_recv_values[disp + j]) /
-                            (pass_num - right_last_recv_iters[i]);
-                        right_last_recv_values[disp + j] = right_recv[j];
-                    }
 
                     right_last_recv_values_norm[i] = right_recv_norm[i];
                     right_last_recv_iters[i] = pass_num;
 
-                    //record that new value is received
-                    /*
+                    // record that new value is received
                     if (file_write == 1) {
-                       fpr << "1,  ";
+                        fpr << "1,  ";
                     }
-                    */
-                }/*  else {
-                    right_temp = 0;
-
-                    for (int j = 0; j < flat.numel(); j++) {
-                        auto slope_avg = 0.0;
-                        for (int k = 0; k < recv_history; k++) {
-                            slope_avg += right_recv_slopes[disp + j][k];
-                        }
-                        slope_avg = slope_avg / recv_history;
-
-                        right_recv[j] =
-                            right_last_recv_values[disp + j] +
-                            slope_avg * (epoch - right_last_recv_iters[i]);
-
-                        // extrapolated norm
-                        right_temp += std::pow(*(right_recv + j), 2);
-                    }
-                    right_temp = std::sqrt(right_temp / flat.numel());   
-
-                    //record that extrpolation is done
-                    if (file_write == 1) {
-                       fpr << "0,  ";
-                    }
-                } //end right recv */
-
-                //writing value received
-                if (file_write == 1) {
-                   fpr << right_temp << ",  "; // << right_recv_diff << ",  ";
                 }
 
-                // forming right tensor - new message or extrapolated
+                // writing value received
+                if (file_write == 1) {
+                    fpr << right_temp << ",  ";  // << right_recv_diff << ",  ";
+                }
+
+                // forming right tensor
                 torch::Tensor right_tensor =
                     torch::from_blob(right_recv, dim_array, torch::kFloat)
                         .clone();
-
-                //left_tensor.squeeze_();
-                //right_tensor.squeeze_();
 
                 // averaging with neighbors
                 param[i].value().data().add_(left_tensor.data());
@@ -595,11 +474,11 @@ int main(int argc, char *argv[])
                 free(temp);
                 free(left_recv);
                 free(right_recv);
-            } //end parameter loop
+            }  // end parameter loop
 
             if (file_write == 1) {
-               fps << std::endl;
-               fpr << std::endl;
+                fps << std::endl;
+                fpr << std::endl;
             }
 
             // Update parameters
@@ -661,7 +540,7 @@ int main(int argc, char *argv[])
         auto test_loader = torch::data::make_data_loader(
             std::move(test_dataset), num_test_samples);
 
-        model->eval(); //enabling evaluation mode to prevent backpropagation
+        model->eval();  // enabling evaluation mode to prevent backpropagation
 
         int num_correct = 0;
 
