@@ -1,11 +1,10 @@
-Instructions 
--------------------------------------
-
 Dependencies
 -------------------------------------
 
-1. Libtorch 
+1. [PyTorch C++/Libtorch](https://pytorch.org/get-started/locally/)  
 2. MPI
+
+Note: This code has been tested on Libtorch 1.5.0 with pre-cxx11 ABI on Linux and Open MPI 4.0.1 compiled with gcc 8.3.0
 
 Dataset
 ------------------------------------
@@ -23,8 +22,6 @@ cmake -DCMAKE_PREFIX_PATH=\path\to\libtorch ..
 make
 ```
 
-Note that a C++11 compliant compiler is required.
-
 Running
 -------------------------------------
 
@@ -37,7 +34,7 @@ ${ARGS}[2] - Determines threshold type; 1 for adaptive threshold, 0 for non-adap
 
 The next arguments depends on the type of threshold:
 
-## Adaptive threshold
+### Adaptive threshold
 
 ${ARGS}[3] - Horizon parameter
 
@@ -47,7 +44,7 @@ Sample Run of adaptive threshold with horizon 1:
 mpirun -np ${NUM_PROCS} ./event 0 1 1
 ```
 
-## Non-adaptive (static) threshold
+### Non-adaptive (static) threshold
 
 ${ARGS}[3] - Value of static threshold
 
