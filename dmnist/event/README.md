@@ -30,6 +30,7 @@ mpirun -np ${NUM_PROCS} ./event ${ARGS}
 ```
 
 ${ARGS}[1] - Flag for file writing for debugging; 1 for enabling, 0 for disabling
+
 ${ARGS}[2] - Determines threshold type; 1 for adaptive threshold, 0 for non-adaptive threshold 
 
 The next arguments depends on the type of threshold:
