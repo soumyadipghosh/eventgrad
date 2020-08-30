@@ -4,7 +4,8 @@ Dependencies
 1. [PyTorch C++/Libtorch](https://pytorch.org/get-started/locally/)  
 2. MPI
 
-Note: This code has been tested on Libtorch 1.5.0 with pre-cxx11 ABI on Linux and Open MPI 4.0.1 compiled with gcc 8.3.0
+Note: This code has been tested on Libtorch 1.5.0 pre-cxx11 ABI without CUDA on Linux and 
+Open MPI 4.0.1 compiled with gcc 8.3.0
 
 Dataset
 ------------------------------------
@@ -54,3 +55,6 @@ Sample Run of static threshold with constant 5e-4
 ```sh
 mpirun -np ${NUM_PROCS} ./event 0 0 5e-4
 ```
+
+Note: For comparison, choosing a horizon of 0 in the adaptive threshold or a constant of 0 
+in the non-adaptive threshold yields the algorithm without event-triggered communication as in Lian et. al (2017)
