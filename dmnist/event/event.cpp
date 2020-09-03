@@ -30,10 +30,13 @@ struct Model : torch::nn::Module {
 
    torch::Tensor forward(torch::Tensor x) {
         x = torch::relu(torch::max_pool2d(conv1->forward(x), 2));
-        x =
-torch::relu(torch::max_pool2d(conv2_drop->forward(conv2->forward(x)), 2)); x =
-x.view({-1, 320}); x = torch::relu(fc1->forward(x)); x = torch::dropout(x, 0.5,
-is_training()); x = fc2->forward(x); return torch::log_softmax(x, 1);
+        x = torch::relu(
+            torch::max_pool2d(conv2_drop->forward(conv2->forward(x)), 2)); 
+        x = x.view({-1, 320}); 
+        x = torch::relu(fc1->forward(x)); 
+        x = torch::dropout(x, 0.5, is_training()); 
+        x = fc2->forward(x); 
+        return torch::log_softmax(x, 1);
     }
 
     torch::nn::Conv2d conv1;
