@@ -28,7 +28,7 @@ struct Model : torch::nn::Module {
         register_module("fc2", fc2);
     }
 
-   torch::Tensor forward(torch::Tensor x) {
+    torch::Tensor forward(torch::Tensor x) {
         x = torch::relu(torch::max_pool2d(conv1->forward(x), 2));
         x = torch::relu(
             torch::max_pool2d(conv2_drop->forward(conv2->forward(x)), 2)); 
