@@ -3,7 +3,7 @@
 The primary objective of this repository is to introduce EventGraD -  a novel communication algorithm
 based on event-triggered communication to reduce communication in parallel machine learning.
 A preliminary paper with further details can be found 
-[here](https://www.researchgate.net/publication/344419608_EventGraD_Event-Triggered_Communication_in_Parallel_Stochastic_Gradient_Descent)
+[here](https://www.researchgate.net/publication/344419608_EventGraD_Event-Triggered_Communication_in_Parallel_Stochastic_Gradient_Descent).
 Please see `/dmnist/event/` for the EventGraD code.
 
 ## PyTorch C++ API meets MPI
