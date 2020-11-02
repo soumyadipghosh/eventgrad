@@ -12,7 +12,7 @@ The secondary objective of this repository is to serve as a starting point to im
 parallel/distributed machine learning using PyTorch C++ (LibTorch) and MPI. Apart from 
 EventGraD, other popular distributed algorithms such as AllReduce based training
 (`/dmnist/cent/`) and [decentralized training with neighbors](http://papers.nips.cc/paper/7117-can-decentralized-algorithms-outperform-centralized-algorithms-a-case-study-for-decentralized-parallel-stochastic-gradient-descent.pdf)(`/dmnist/decent/`)
-are covered.
+are covered. There is also an [active pull request](https://github.com/pytorch/examples/pull/809) to merge some of this code to the PyTorch examples repository. 
 
 ## Plan of Development
 
