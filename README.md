@@ -14,6 +14,6 @@ repository [here](https://github.com/pytorch/examples/tree/master/cpp/distribute
 
 ## Publications
 
-1. Soumyadip Ghosh, Bernardo Aquino and Vijay Gupta, "EventGraD: Event-Triggered Communication in Parallel Machine Learning", accepted, to appear in Elsevier Neurocomputing, [arXiv:2103.07454](https://arxiv.org/abs/2103.07454)
+1. Soumyadip Ghosh, Bernardo Aquino and Vijay Gupta, "EventGraD: Event-Triggered Communication in Parallel Machine Learning", [Neurocomputing](https://doi.org/10.1016/j.neucom.2021.08.143), Nov 2021 ([arxiv](https://arxiv.org/abs/2103.07454))
 
 2. Soumyadip Ghosh and Vijay Gupta, "EventGraD: Event-Triggered Communication in Parallel Stochastic Gradient Descent", [Workshop on Machine Learning in HPC Environments (MLHPC), Supercomputing Conference (SC), Virtual, November 2020](https://www.researchgate.net/publication/344419608_EventGraD_Event-Triggered_Communication_in_Parallel_Stochastic_Gradient_Descent) 
